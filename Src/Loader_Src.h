@@ -209,12 +209,10 @@ static int EraseSector (unsigned long adr);
 static int  QSPI_WritePage(unsigned long adr, unsigned long sz, unsigned char *buf);
 static int QSPI_WriteEnable(QSPI_HandleTypeDef *hqspi);
 static int QSPI_AutoPollingMemReady(QSPI_HandleTypeDef *hqspi);
-static void ResetMemory(QSPI_HandleTypeDef *hqspi);
-static int QSPI_DummyCyclesCfg(QSPI_HandleTypeDef *hqspi);
 HAL_StatusTypeDef HAL_InitTick(uint32_t TickPriority);
 void HAL_Delay(__IO uint32_t Delay);
 void SystemClock_Config(void);
-static int QUADSPI_MappedMode(QSPI_HandleTypeDef *qspiHandle);
+static int QUADSPI_MappedMode(QSPI_HandleTypeDef *qspiHandle, uint8_t check);
 
 //All system initialisation
 int Init (uint8_t configureMemoryMappedMode);

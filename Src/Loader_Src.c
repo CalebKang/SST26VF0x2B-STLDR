@@ -48,6 +48,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+static uint32_t MemoryMappedMode;
+static uint32_t AlreadySysClock;
 static QSPI_CommandTypeDef sCommand;
 __IO uint8_t CmdCplt, RxCplt, TxCplt, StatusMatch, TimeOut;
 /* USER CODE END PV */
@@ -58,9 +60,9 @@ void SystemClock_Config(void);
 static int QSPI_WritePage(unsigned long adr, unsigned long sz, unsigned char *buf);
 static int QSPI_WriteEnable(QSPI_HandleTypeDef *qspiHandle);
 static int QSPI_AutoPollingMemReady(QSPI_HandleTypeDef *qspiHandle);
-static int QUADSPI_MappedMode(QSPI_HandleTypeDef *qspiHandle);
+static int QUADSPI_MappedMode(QSPI_HandleTypeDef *qspiHandle, uint8_t check);
 static int EraseSector(unsigned long adr);
-static void ResetMemory(QSPI_HandleTypeDef *qspiHandle);
+static void ResetMemory(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -84,13 +86,10 @@ static int  QSPI_WritePage(unsigned long adr, unsigned long sz, unsigned char *b
     Error_Handler();
   }
 
-//  TxCplt = 0;
   if (HAL_QSPI_Transmit(&hqspi, buf, HAL_QPSI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
   {
     Error_Handler();
   }
-
-//  while(TxCplt == 0);
 
   HAL_Delay(2);
   return 1;
@@ -165,30 +164,43 @@ static int QSPI_AutoPollingMemReady(QSPI_HandleTypeDef *qspiHandle)
   return 1;
 }
 
-static int QUADSPI_MappedMode(QSPI_HandleTypeDef *qspiHandle)
+static int QUADSPI_MappedMode(QSPI_HandleTypeDef *qspiHandle, uint8_t check)
 {
-  char MemoryMappedMode = 0;
-
-  if (!MemoryMappedMode)
+  if(check == 1)
   {
-    QSPI_MemoryMappedTypeDef sMemMappedCfg;
-
-    sCommand.AlternateByteMode = QSPI_ALTERNATE_BYTES_NONE;
-    sCommand.AlternateBytesSize = 0;
-    sCommand.InstructionMode = QSPI_INSTRUCTION_1_LINE;
-    sCommand.Instruction = 0xEB;
-    sCommand.AddressMode = QSPI_ADDRESS_4_LINES;
-    sCommand.DataMode    = QSPI_DATA_4_LINES;
-    sCommand.DummyCycles = 6; //no * 2
-
-    sMemMappedCfg.TimeOutActivation = QSPI_TIMEOUT_COUNTER_DISABLE;
-
-    if (HAL_QSPI_MemoryMapped(qspiHandle, &sCommand, &sMemMappedCfg) != HAL_OK)
+    if (MemoryMappedMode != 0xAAAAAAAA)
     {
-      Error_Handler();
+      QSPI_MemoryMappedTypeDef sMemMappedCfg;
+
+      sCommand.AlternateByteMode = QSPI_ALTERNATE_BYTES_NONE;
+      sCommand.AlternateBytesSize = 0;
+      sCommand.InstructionMode = QSPI_INSTRUCTION_1_LINE;
+      sCommand.Instruction = 0xEB;
+      sCommand.AddressMode = QSPI_ADDRESS_4_LINES;
+      sCommand.DataMode    = QSPI_DATA_4_LINES;
+      sCommand.DummyCycles = 6; //no * 2
+
+      sMemMappedCfg.TimeOutActivation = QSPI_TIMEOUT_COUNTER_DISABLE;
+
+      if (HAL_QSPI_MemoryMapped(qspiHandle, &sCommand, &sMemMappedCfg) != HAL_OK)
+      {
+        Error_Handler();
+      }
+      MemoryMappedMode = 0xAAAAAAAA;
     }
-    MemoryMappedMode = 1;
   }
+  else
+  {
+    if (MemoryMappedMode == 0xAAAAAAAA)
+    {
+      MemoryMappedMode = 0xBBBBBBBB;
+      if (HAL_QSPI_Abort(qspiHandle) != HAL_OK)
+      {
+        Error_Handler();
+      }
+    }
+  }
+
   return 1;
 }
 
@@ -206,27 +218,16 @@ static int EraseSector (unsigned long adr)
   sCommand.NbData      = 0;
   sCommand.DummyCycles = 0;
 
-//  CmdCplt = 0;
   if (HAL_QSPI_Command(&hqspi, &sCommand, HAL_QPSI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
   {
     Error_Handler();
   }
-
-//  while(CmdCplt == 0);
 
   HAL_Delay(50);
 
   return 1;
 }
 
-static int QSPI_DummyCyclesCfg(QSPI_HandleTypeDef *qspiHandle)
-{
-  return 1;
-}
-
-static void ResetMemory(QSPI_HandleTypeDef *qspiHandle)
-{
-}
 /*********************************************************************************/
 //KeepInCompilation
 /*********************************************************************************/
@@ -235,6 +236,8 @@ KeepInCompilation int Write(uint32_t Address, uint32_t Size, uint8_t* buffer)
 {
   uint32_t NumOfPage = 0, NumOfSingle = 0, Addr = 0, count = 0, temp = 0;
   uint32_t   QSPI_DataNum = 0;
+
+  QUADSPI_MappedMode(&hqspi, 0);
 
   Addr = Address % QSPI_PAGE_SIZE;
   count = QSPI_PAGE_SIZE - Addr;
@@ -309,12 +312,15 @@ KeepInCompilation int Write(uint32_t Address, uint32_t Size, uint8_t* buffer)
     }
   }
 
+  QUADSPI_MappedMode(&hqspi, 1);
   return 1;
 }
 KeepInCompilation int SectorErase (uint32_t EraseStartAddress ,uint32_t EraseEndAddress)
 {
   uint32_t BlockAddr;
   EraseStartAddress = EraseStartAddress - (EraseStartAddress % 0x1000);
+
+  QUADSPI_MappedMode(&hqspi, 0);
 
   while (EraseEndAddress >= EraseStartAddress)
   {
@@ -326,6 +332,7 @@ KeepInCompilation int SectorErase (uint32_t EraseStartAddress ,uint32_t EraseEnd
     EraseStartAddress += 0x1000;
   }
 
+  QUADSPI_MappedMode(&hqspi, 1);
   return 1;
 }
 uint32_t CheckSum(uint32_t StartAddress, uint32_t Size, uint32_t InitVal)
@@ -401,7 +408,7 @@ KeepInCompilation uint64_t Verify (uint32_t MemoryAddr, uint32_t RAMBufferAddr, 
   uint64_t checksum;
   Size*=4;
 
-  if(QUADSPI_MappedMode(&hqspi)!=1)
+  if(QUADSPI_MappedMode(&hqspi, 1)!=1)
     return 0;
 
   checksum = CheckSum((uint32_t)MemoryAddr + (missalignement & 0xF), Size - ((missalignement >> 16) & 0xF), InitVal);
@@ -450,7 +457,9 @@ KeepInCompilation int Read (uint32_t Address, uint32_t Size, uint16_t* buffer)
 int Init(uint8_t configureMemoryMappedMode)
 {
   /* USER CODE BEGIN 1 */
-
+  MemoryMappedMode = 0;
+  QSPI_CommandTypeDef iniCommand = {0};
+  sCommand = iniCommand;
   /* USER CODE END 1 */
   
 
@@ -474,7 +483,6 @@ int Init(uint8_t configureMemoryMappedMode)
   MX_GPIO_Init();
   MX_QUADSPI_Init();
   /* USER CODE BEGIN 2 */
-
   sCommand.AlternateByteMode = QSPI_ALTERNATE_BYTES_NONE;
   sCommand.AlternateBytesSize = 0;
   sCommand.InstructionMode   = QSPI_INSTRUCTION_1_LINE;
@@ -544,13 +552,10 @@ int Init(uint8_t configureMemoryMappedMode)
   sCommand.NbData      = 0;
   sCommand.DummyCycles = 0;
 
-//  CmdCplt = 0;
   if (HAL_QSPI_Command(&hqspi, &sCommand, HAL_QPSI_TIMEOUT_DEFAULT_VALUE) != HAL_OK)
   {
     Error_Handler();
   }
-
-//  while(CmdCplt == 0);
 
   QSPI_AutoPollingMemReady(&hqspi);
 
@@ -570,7 +575,7 @@ int Init(uint8_t configureMemoryMappedMode)
 
   if(!configureMemoryMappedMode)
   {
-    if(QUADSPI_MappedMode(&hqspi) !=1)
+    if(QUADSPI_MappedMode(&hqspi, 1) !=1)
       return 0; //fail
   }
 
@@ -584,6 +589,10 @@ int Init(uint8_t configureMemoryMappedMode)
   */
 void SystemClock_Config(void)
 {
+  if(AlreadySysClock == 0xAAAAAAAA)
+    return;
+
+  AlreadySysClock = 0xAAAAAAAA;
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
 
@@ -675,11 +684,77 @@ void HAL_Delay(uint32_t Delay)
 
   for(j = 0; j<Delay; j++)
   {
-    for(i=0; i<50000; i++)
+    for(i=0; i<10000; i++)
     {
-      __asm("nop");
+       __asm volatile("nop");
+       __asm volatile("nop");
+       __asm volatile("nop");
+       __asm volatile("nop");
+       __asm volatile("nop");
     }
   }
+}
+
+/*******************************************************************************
+Description :     Reset memory.
+Inputs :
+hqspi    : QSPI handle
+
+outputs :
+None
+********************************************************************************/
+static void ResetMemory(void)
+{
+  /* Reset memory config, Cmd in 1 line */
+  /* Send RESET ENABLE command (0x66) to be able to reset the memory registers */
+  while(hqspi.Instance->SR & QSPI_FLAG_BUSY);  /* Wait for busy flag to be cleared */
+  hqspi.Instance->CCR = 0x2166;
+  hqspi.Instance->AR = 0;
+  hqspi.Instance->ABR = 0;
+  hqspi.Instance->DLR = 0;
+  __DSB();
+
+  /* Send RESET command (0x99) to reset the memory registers */
+  while(hqspi.Instance->SR & QSPI_FLAG_BUSY);  /* Wait for busy flag to be cleared */
+  hqspi.Instance->CCR = 0x2199;
+  hqspi.Instance->AR = 0;
+  hqspi.Instance->ABR = 0;
+  hqspi.Instance->DLR = 0;
+  __DSB();
+
+  /* Reset memory config, Cmd in 2 lines*/
+  /* Send RESET ENABLE command (0x66) to be able to reset the memory registers */
+  while(hqspi.Instance->SR & QSPI_FLAG_BUSY);  /* Wait for busy flag to be cleared */
+  hqspi.Instance->CCR = 0x2266;
+  hqspi.Instance->AR = 0;
+  hqspi.Instance->ABR = 0;
+  hqspi.Instance->DLR = 0;
+  __DSB();
+
+  /* Send RESET command (0x99) to reset the memory registers */
+  while(hqspi.Instance->SR & QSPI_FLAG_BUSY);  /* Wait for busy flag to be cleared */
+  hqspi.Instance->CCR = 0x2299;
+  hqspi.Instance->AR = 0;
+  hqspi.Instance->ABR = 0;
+  hqspi.Instance->DLR = 0;
+  __DSB();
+
+  /* Reset memory config, Cmd in 4 lines*/
+  /* Send RESET ENABLE command (0x66) to be able to reset the memory registers */
+  while(hqspi.Instance->SR & QSPI_FLAG_BUSY);  /* Wait for busy flag to be cleared */
+  hqspi.Instance->CCR = 0x2366;
+  hqspi.Instance->AR = 0;
+  hqspi.Instance->ABR = 0;
+  hqspi.Instance->DLR = 0;
+  __DSB();
+
+  /* Send RESET command (0x99) to reset the memory registers */
+  while(hqspi.Instance->SR & QSPI_FLAG_BUSY);  /* Wait for busy flag to be cleared */
+  hqspi.Instance->CCR = 0x2399;
+  hqspi.Instance->AR = 0;
+  hqspi.Instance->ABR = 0;
+  hqspi.Instance->DLR = 0;
+  __DSB();
 }
 
 /* USER CODE END 4 */
